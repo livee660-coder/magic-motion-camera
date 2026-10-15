@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Magic Motion Camera</title>
+<style>
+:root{color-scheme:dark;--cyan:#62e8ff;--purple:#a88bff}
+*{box-sizing:border-box}body{margin:0;background:#070914;color:#f5f7ff;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:20px 18px 12px;text-align:center}h1{margin:0;font-size:clamp(24px,5vw,38px);letter-spacing:.02em}
+h1 span{color:var(--cyan)}header p{margin:8px auto 0;color:#aeb7d2;max-width:650px;font-size:14px}
+main{width:min(1100px,100%);margin:auto;padding:12px 14px 28px}
+.stage{position:relative;overflow:hidden;border:1px solid #29314e;border-radius:20px;background:#02030a;aspect-ratio:4/3;max-height:70vh;margin:auto;box-shadow:0 0 45px #4a48a522}
+video,canvas{position:absolute;width:100%;height:100%;inset:0;object-fit:cover;transform:scaleX(-1)}
+#fx{pointer-events:none}#overlay{position:absolute;inset:12px;display:flex;align-items:flex-start;justify-content:space-between;pointer-events:none}
+.pill{font-size:12px;padding:7px 10px;border:1px solid #3c4768;background:#0b1024d9;border-radius:99px;color:#c9d7ff}
+.center{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:#c4cbe0;background:#050816aa}
+.controls{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin:14px 0}
+button,select{border:1px solid #414d70;background:#121a32;color:white;padding:12px 16px;border-radius:12px;font:inherit}
+button.primary{background:linear-gradient(100deg,#1baed2,#7658df);border:0;font-weight:700}
+button:disabled{opacity:.5}
+.status{color:#aeb7d2;text-align:center;font-size:13px;min-height:22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:16px}
+.card{border:1px solid #262e49;background:#0d1122;padding:14px;border-radius:14px}.card b{display:block;margin-bottom:5px}.card span{font-size:13px;color:#aeb7d2}
+footer{text-align:center;color:#7883a4;font-size:12px;padding:16px}
+@media(max-width:600px){.stage{aspect-ratio:3/4;max-height:65vh}.pill{font-size:11px;padding:6px 8px}}
+</style>
+</head>
+<body>
+<header>
+<h1>✨ Magic <span>Motion</span> Camera</h1>
+<p>Qo‘l ishoralaring bilan neon zarralar va sehrli energiya effektlarini boshqar.</p>
+</header>
+<main>
+<section class="stage" id="stage">
+<video id="video" autoplay playsinline muted></video>
+<canvas id="fx"></canvas>
+<div id="overlay"><span class="pill" id="gesture">Ishora: —</span><span class="pill" id="fps">Kamera tayyor</span></div>
+<div class="center" id="welcome"><div><div style="font-size:42px">🖐️</div><b>Kamerani ishga tushir</b><p style="font-size:13px">Yorug‘ joyda kaftingni kameraga ko‘rsat.</p></div></div>
+</section>
+<div class="controls">
+<button class="primary" id="start">📷 Kamerani yoqish</button>
+<button id="stop" disabled>⏹ To‘xtatish</button>
+<select id="mode" aria-label="Effekt">
+<option value="auto">Avto effekt</option><option value="ring">Energiya halqasi</option><option value="stars">Yulduzlar</option><option value="orbit">Orbita</option>
+</select>
+</div>
+<div class="status" id="status">Boshlash uchun kamera tugmasini bosing.</div>
+<div class="cards">
+<div class="card"><b>✋ Kaft ochiq</b><span>Yorqin energiya zarralari paydo bo‘ladi.</span></div>
+<div class="card"><b>✊ Musht</b><span>Effekt ichkariga yig‘ilib, yo‘qoladi.</span></div>
+<div class="card"><b>☝️ Bitta barmoq</b><span>Energiya halqasi yoki yulduzlar.</span></div>
+</div>
+</main>
+<footer>MediaPipe Hand Landmarker · Three.js ishlatmasdan yengil canvas prototipi</footer>
+<script type="module">
+import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const video=document.querySelector('#video'), canvas=document.querySelector('#fx'), ctx=canvas.getContext('2d');
+const startBtn=document.querySelector('#start'), stopBtn=document.querySelector('#stop'), statusEl=document.querySelector('#status'), gestureEl=document.querySelector('#gesture'), welcome=document.querySelector('#welcome'), modeEl=document.querySelector('#mode'), fpsEl=document.querySelector('#fps');
+let stream=null, landmarker=null, running=false, lastVideoTime=-1, hand=null, gesture='Kamera tayyor', particles=[], raf=0;
+const rand=(a,b)=>a+Math.random()*(b-a);
+function resize(){const r=canvas.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);canvas.width=Math.round(r.width*d);canvas.height=Math.round(r.height*d);ctx.setTransform(d,0,0,d,0,0)}
+new ResizeObserver(resize).observe(canvas); resize();
+function dist(a,b){return Math.hypot(a.x-b.x,a.y-b.y)}
+function detectGesture(lm){
+  const tips=[8,12,16,20], bases=[6,10,14,18];
+  const extended=tips.map((t,i)=>lm[t].y<lm[bases[i]].y);
+  const count=extended.filter(Boolean).length;
+  if(count>=4 && lm[4].x!==undefined) return 'Kaft ochiq';
+  if(count===0) return 'Musht';
+  if(extended[0] && !extended[1] && !extended[2] && !extended[3]) return 'Bitta barmoq';
+  if(extended[0]&&extended[1]&& !extended[2]&&!extended[3]) return 'Ikki barmoq';
+  return 'Ishora';
+}
+function spawn(x,y,amount=5){for(let i=0;i<amount;i++)particles.push({x,y,px:rand(-2,2),py:rand(-2,2),life:rand(35,90),max:90,size:rand(1,4),h:rand(175,285),angle:rand(0,Math.PI*2),radius:rand(8,90)})}
+function draw(){
+  raf=requestAnimationFrame(draw);
+  const w=canvas.clientWidth,h=canvas.clientHeight;
+  ctx.clearRect(0,0,w,h);
+  if(hand){
+    const x=(1-hand.x)*w,y=hand.y*h, mode=modeEl.value;
+    const isFist=gesture==='Musht';
+    if(!isFist) spawn(x,y,mode==='stars'?7:3);
+    const t=performance.now()/1000;
+    if(!isFist){
+      ctx.save();ctx.globalCompositeOperation='lighter';
+      if(mode==='ring'||gesture==='Bitta barmoq'||gesture==='Ikki barmoq'){
+        for(let k=0;k<3;k++){ctx.beginPath();ctx.ellipse(x,y,35+k*17,35+k*17, t*(k%2?-.8:.8),0,Math.PI*2);ctx.strokeStyle=`hsla(${190+k*35},100%,70%,${.8-k*.18})`;ctx.lineWidth=2;ctx.shadowBlur=18;ctx.shadowColor='#55eaff';ctx.stroke()}
+      } else if(mode==='orbit'){
+        for(let i=0;i<8;i++){let a=t*1.5+i*Math.PI/4,xx=x+Math.cos(a)*65,yy=y+Math.sin(a)*28;ctx.beginPath();ctx.arc(xx,yy,4,0,Math.PI*2);ctx.fillStyle='#9c8bff';ctx.shadowBlur=15;ctx.shadowColor='#9c8bff';ctx.fill()}
+      } else {
+        ctx.beginPath();ctx.arc(x,y,28+Math.sin(t*4)*5,0,Math.PI*2);ctx.strokeStyle='#72edff';ctx.lineWidth=2;ctx.shadowBlur=25;ctx.shadowColor='#72edff';ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  ctx.save();ctx.globalCompositeOperation='lighter';
+  particles=particles.filter(p=>p.life>0);
+  for(const p of particles){
+    if(hand && gesture==='Musht'){p.px+=(hand.x* w-p.x)*.018;p.py+=(hand.y*h-p.y)*.018}
+    p.x+=p.px;p.y+=p.py;p.life--;
+    ctx.globalAlpha=Math.max(0,p.life/p.max);ctx.fillStyle=`hsl(${p.h},100%,70%)`;ctx.shadowBlur=12;ctx.shadowColor=ctx.fillStyle;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.size,0,Math.PI*2);ctx.fill();
+  }ctx.restore();
+}
+async function init(){
+  startBtn.disabled=true;statusEl.textContent='AI model yuklanmoqda…';
+  try{
+    const vision=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    landmarker=await HandLandmarker.createFromOptions(vision,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:1});
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject=stream;await video.play();running=true;welcome.style.display='none';startBtn.disabled=true;stopBtn.disabled=false;statusEl.textContent='Tayyor! Kaftingni kameraga ko‘rsat.';draw();processFrame();
+  }catch(e){console.error(e);statusEl.textContent='Kamera ochilmadi. HTTPS, kamera ruxsati va internetni tekshiring.';startBtn.disabled=false}
+}
+function processFrame(){
+ if(!running)return;
+ if(video.currentTime!==lastVideoTime && landmarker){lastVideoTime=video.currentTime;const res=landmarker.detectForVideo(video,performance.now());
+  if(res.landmarks?.length){const lm=res.landmarks[0];hand={x:lm[9].x,y:lm[9].y};gesture=detectGesture(lm);gestureEl.textContent='Ishora: '+gesture;fpsEl.textContent='Qo‘l aniqlandi';}
+  else{hand=null;gesture='';gestureEl.textContent='Ishora: —';fpsEl.textContent='Qo‘l topilmadi'}
+ }requestAnimationFrame(processFrame)
+}
+function stop(){running=false;cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;video.srcObject=null;hand=null;ctx.clearRect(0,0,canvas.width,canvas.height);particles=[];welcome.style.display='grid';startBtn.disabled=false;stopBtn.disabled=true;statusEl.textContent='Kamera to‘xtatildi.';gestureEl.textContent='Ishora: —';fpsEl.textContent='Kamera tayyor'}
+startBtn.addEventListener('click',init);stopBtn.addEventListener('click',stop);
+window.addEventListener('beforeunload',stop);
+</script>
+</body>
+</html>
